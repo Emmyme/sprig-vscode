@@ -264,7 +264,7 @@ export function activate(context: vscode.ExtensionContext) {
                 path.join(os.homedir(), 'Desktop', 'Sprig.exe')
             ];
             
-            let sprigPath = null;
+            let sprigPath: string | null = null;
             
             // Check if Sprig is installed in any common location
             for (const appPath of possiblePaths) {
@@ -297,14 +297,20 @@ export function activate(context: vscode.ExtensionContext) {
             if (sprigPath) {
                 // Sprig is installed, launch it
                 try {
-                    const child = spawn(sprigPath, [], { 
-                        detached: true, 
-                        stdio: 'ignore',
-                        shell: true 
+                    exec(`start "" "${sprigPath}"`, { shell: true }, (error: any) => {
+                        if (error) {
+                            // Try PowerShell as fallback
+                            exec(`powershell -Command "Start-Process -FilePath '${sprigPath}'"`, (error2: any) => {
+                                if (error2) {
+                                    vscode.window.showErrorMessage(`Failed to launch Sprig: ${error2.message}`);
+                                } else {
+                                    vscode.window.showInformationMessage('Sprig application launched!');
+                                }
+                            });
+                        } else {
+                            vscode.window.showInformationMessage('Sprig application launched!');
+                        }
                     });
-                    
-                    child.unref();
-                    vscode.window.showInformationMessage('Sprig application launched!');
                 } catch (error) {
                     vscode.window.showErrorMessage(`Failed to launch Sprig: ${error}`);
                 }
@@ -354,7 +360,7 @@ export function activate(context: vscode.ExtensionContext) {
         const actions = [
             { label: '🌿 Search Sprig Library', command: 'sprig.searchSnippets' },
             { label: '🌿 Save Selection', command: 'sprig.saveSelection' },
-            { label: '� Browse Sprig Desktop App', command: 'sprig.openBrowser' }
+            { label: '🔍 Browse Sprig Desktop App', command: 'sprig.openBrowser' }
         ];
 
         vscode.window.showQuickPick(actions, {

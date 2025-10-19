@@ -13,3 +13,5 @@ vsc-extension-quickstart.md
 **/.vscode-test.*
 node_modules/**
 !node_modules/sqlite3/**
+!node_modules/bindings/**
+!node_modules/file-uri-to-path/**
