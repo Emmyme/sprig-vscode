@@ -1,0 +1,124 @@
+{
+  "name": "sprig",
+  "displayName": "Sprig - VS Code Extension",
+  "description": "Code manager for Sprig - save, search and insert snippets, templates, functions and components directly in VS Code",
+  "version": "1.0.0",
+  "publisher": "Emmyme",
+  "icon": "images/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Emmyme/sprig-vscode.git"
+  },
+  "keywords": [
+    "code",
+    "snippets",
+    "library",
+    "manager",
+    "sprig",
+    "save",
+    "search",
+    "templates"
+  ],
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Snippets",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sprig.saveSelection",
+        "title": "Save Selection to Sprig",
+        "category": "Sprig"
+      },
+      {
+        "command": "sprig.openBrowser",
+        "title": "Browse Sprig Library",
+        "category": "Sprig"
+      },
+      {
+        "command": "sprig.searchSnippets",
+        "title": "Search Sprig Snippets",
+        "category": "Sprig"
+      },
+      {
+        "command": "sprig.insertSnippet",
+        "title": "Insert from Sprig",
+        "category": "Sprig"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "sprig.saveSelection",
+          "when": "editorHasSelection",
+          "group": "sprig@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sprig.saveSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "sprig.openBrowser"
+        },
+        {
+          "command": "sprig.searchSnippets"
+        },
+        {
+          "command": "sprig.insertSnippet"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "sprig.saveSelection",
+        "key": "ctrl+alt+s",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "sprig.searchSnippets",
+        "key": "ctrl+alt+f"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.105.0",
+    "@typescript-eslint/eslint-plugin": "^8.45.0",
+    "@typescript-eslint/parser": "^8.45.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.10",
+    "eslint": "^9.36.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@types/sqlite3": "^3.1.11",
+    "sqlite3": "^5.1.7"
+  }
+}
