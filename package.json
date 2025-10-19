@@ -2,7 +2,7 @@
   "name": "sprig",
   "displayName": "Sprig - VS Code Extension",
   "description": "Code manager for Sprig - save, search and insert snippets, templates, functions and components directly in VS Code",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "Emmyme",
   "icon": "images/icon.png",
   "license": "MIT",

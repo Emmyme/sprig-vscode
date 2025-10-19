@@ -14,17 +14,27 @@ interface SprigItem {
 
 class SprigManager {
     private dbPath: string;
-    private sqlite3: any;
+    private sqlite3: any = null;
 
     constructor() {
         this.dbPath = path.join(os.homedir(), '.sprig', 'sprig.db');
-        // Dynamically require sqlite3 to avoid bundling issues
-        this.sqlite3 = require('sqlite3').verbose();
+    }
+
+    private getSqlite3() {
+        if (!this.sqlite3) {
+            try {
+                this.sqlite3 = require('sqlite3').verbose();
+            } catch (error) {
+                throw new Error(`Failed to load sqlite3: ${error}`);
+            }
+        }
+        return this.sqlite3;
     }
 
     private async executeQuery(query: string, params: any[] = []): Promise<any[]> {
         return new Promise((resolve, reject) => {
-            const db = new this.sqlite3.Database(this.dbPath, (err: any) => {
+            const sqlite3 = this.getSqlite3();
+            const db = new sqlite3.Database(this.dbPath, (err: any) => {
                 if (err) {
                     reject(new Error(`Failed to open database: ${err.message}`));
                     return;
@@ -38,10 +48,7 @@ class SprigManager {
                     return;
                 }
                 
-                db.close((closeErr: any) => {
-                    if (closeErr) {
-                        console.error('Warning: Failed to close database:', closeErr.message);
-                    }
+                db.close(() => {
                     resolve(rows || []);
                 });
             });
@@ -52,10 +59,9 @@ class SprigManager {
         try {
             const sql = 'SELECT * FROM items ORDER BY created_at DESC';
             const rows = await this.executeQuery(sql);
-            console.log(`Found ${rows.length} items using child process`);
+
             return rows;
         } catch (error) {
-            console.error('Error searching items:', error);
             return [];
         }
     }
@@ -64,9 +70,8 @@ class SprigManager {
         try {
             const sql = `INSERT INTO items (title, content, language, type, tags, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`;
             await this.executeQuery(sql, [item.title, item.content, item.language, item.type, item.tags]);
-            console.log('Item saved successfully using child process');
+
         } catch (error) {
-            console.error('Error saving item:', error);
             throw error;
         }
     }
@@ -96,21 +101,12 @@ function updateInlineDecorations(editor: vscode.TextEditor) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Sprig extension is now active!');
     sprigManager = new SprigManager();
-    
-    // Create status bar item with Sprig icon
-    sprigStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    sprigStatusBar.text = '$(symbol-misc) Sprig';
-    sprigStatusBar.tooltip = 'Sprig Code Manager - Search, Save & Browse your code library';
-    sprigStatusBar.command = 'sprig.iconClick';
-    sprigStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-    sprigStatusBar.show();
     
     // Create inline decorations for when text is selected
     sprigInlineDecorations = vscode.window.createTextEditorDecorationType({
         after: {
-            contentText: ' 🌱 Save to Sprig',
+            contentText: ' 🌿 Save to Sprig',
             color: '#4CAF50',
             fontStyle: 'italic',
             margin: '0 0 0 10px',
@@ -161,10 +157,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Search command
     let searchSnippets = vscode.commands.registerCommand('sprig.searchSnippets', async () => {
         try {
-            console.log('Searching for items...');
             const items = await sprigManager.searchItems();
-            
-            console.log(`Retrieved ${items.length} items`);
             
             if (items.length === 0) {
                 vscode.window.showInformationMessage('No items found in Sprig library');
@@ -192,7 +185,6 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             }
         } catch (error) {
-            console.error('Search error:', error);
             vscode.window.showErrorMessage(`Failed to search Sprig library: ${error}`);
         }
     });
@@ -264,11 +256,12 @@ export function activate(context: vscode.ExtensionContext) {
             
             // Common paths where Sprig might be installed
             const possiblePaths = [
-                path.join(os.homedir(), 'AppData', 'Local', 'sprig', 'sprig.exe'),
-                path.join(os.homedir(), 'Desktop', 'sprig.exe'),
-                path.join(process.cwd(), '..', 'codelib', 'build', 'bin', 'sprig.exe'),
+                path.join('C:', 'Program Files', 'Sprig', 'Sprig.exe'),
+                path.join('C:', 'Program Files (x86)', 'Sprig', 'Sprig.exe'),
                 path.join('C:', 'Program Files', 'Sprig', 'sprig.exe'),
-                path.join('C:', 'Program Files (x86)', 'Sprig', 'sprig.exe')
+                path.join('C:', 'Program Files (x86)', 'Sprig', 'sprig.exe'),
+                path.join(os.homedir(), 'AppData', 'Local', 'Sprig', 'Sprig.exe'),
+                path.join(os.homedir(), 'Desktop', 'Sprig.exe')
             ];
             
             let sprigPath = null;
@@ -284,18 +277,22 @@ export function activate(context: vscode.ExtensionContext) {
             // Check if it's available in PATH
             if (!sprigPath) {
                 await new Promise<void>((resolve) => {
-                    exec('where sprig.exe', (error: any, stdout: string) => {
+                    exec('where Sprig.exe', (error: any, stdout: string) => {
                         if (!error && stdout.trim()) {
                             sprigPath = stdout.trim().split('\n')[0];
+                        } else {
+                            exec('where sprig.exe', (error2: any, stdout2: string) => {
+                                if (!error2 && stdout2.trim()) {
+                                    sprigPath = stdout2.trim().split('\n')[0];
+                                }
+                                resolve();
+                            });
+                            return;
                         }
                         resolve();
                     });
                 });
             }
-            
-            // Check development environment
-            const devPath = path.join(process.cwd(), '..', 'codelib');
-            const isDevEnvironment = await fileExists(path.join(devPath, 'wails.json'));
             
             if (sprigPath) {
                 // Sprig is installed, launch it
@@ -311,21 +308,6 @@ export function activate(context: vscode.ExtensionContext) {
                 } catch (error) {
                     vscode.window.showErrorMessage(`Failed to launch Sprig: ${error}`);
                 }
-            } else if (isDevEnvironment) {
-                // Development environment available
-                try {
-                    const child = spawn('wails', ['dev'], {
-                        cwd: devPath,
-                        detached: true,
-                        stdio: 'ignore',
-                        shell: true
-                    });
-                    
-                    child.unref();
-                    vscode.window.showInformationMessage('Sprig application started in development mode!');
-                } catch (error) {
-                    vscode.window.showErrorMessage('Development environment found but failed to start. Make sure Wails is installed.');
-                }
             } else {
                 // Sprig not installed, show download option
                 const action = await vscode.window.showInformationMessage(
@@ -336,7 +318,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 if (action === 'Download Sprig Desktop App') {
                     // Open download page in browser
-                    vscode.env.openExternal(vscode.Uri.parse('https://github.com/your-username/sprig/releases')); // Update with actual download URL
+                    vscode.env.openExternal(vscode.Uri.parse('https://github.com/Emmyme/sprig/releases')); // Update with actual download URL
                 }
             }
         } catch (error) {
@@ -428,6 +410,14 @@ export function activate(context: vscode.ExtensionContext) {
             return codeLenses;
         }
     });
+
+    // Create status bar item with Sprig icon (after commands are registered)
+    sprigStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    sprigStatusBar.text = '🌿 Sprig';
+    sprigStatusBar.tooltip = 'Sprig Code Manager - Search, Save & Browse your code library';
+    sprigStatusBar.command = 'sprig.iconClick';
+    sprigStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+    sprigStatusBar.show();
 
     context.subscriptions.push(searchSnippets, saveSelection, openBrowser, insertSnippet, quickSave, sprigIconClick, sprigStatusBar, codeLensProvider, hoverProvider);
 }
