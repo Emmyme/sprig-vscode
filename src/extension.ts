@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn } from 'child_process';
 
 interface SprigItem {
     id: number;
@@ -15,58 +14,36 @@ interface SprigItem {
 
 class SprigManager {
     private dbPath: string;
+    private sqlite3: any;
 
     constructor() {
         this.dbPath = path.join(os.homedir(), '.sprig', 'sprig.db');
+        // Dynamically require sqlite3 to avoid bundling issues
+        this.sqlite3 = require('sqlite3').verbose();
     }
 
     private async executeQuery(query: string, params: any[] = []): Promise<any[]> {
         return new Promise((resolve, reject) => {
-            const script = `
-const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('${this.dbPath.replace(/\\/g, '\\\\')}');
-
-db.all(\`${query}\`, ${JSON.stringify(params)}, (err, rows) => {
-    if (err) {
-        process.exit(1);
-    }
-    console.log(JSON.stringify(rows || []));
-    db.close();
-});
-            `;
-
-            const child = spawn('node', ['-e', script], {
-                cwd: path.dirname(__dirname),
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
-
-            let stdout = '';
-            let stderr = '';
-
-            child.stdout.on('data', (data) => {
-                stdout += data.toString();
-            });
-
-            child.stderr.on('data', (data) => {
-                stderr += data.toString();
-            });
-
-            child.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Database query failed: ${stderr}`));
+            const db = new this.sqlite3.Database(this.dbPath, (err: any) => {
+                if (err) {
+                    reject(new Error(`Failed to open database: ${err.message}`));
                     return;
                 }
-
-                try {
-                    const result = JSON.parse(stdout.trim());
-                    resolve(result);
-                } catch (e) {
-                    reject(new Error(`Failed to parse database result: ${stdout}`));
-                }
             });
 
-            child.on('error', (err) => {
-                reject(new Error(`Failed to spawn database process: ${err.message}`));
+            db.all(query, params, (err: any, rows: any[]) => {
+                if (err) {
+                    db.close();
+                    reject(new Error(`Database query failed: ${err.message}`));
+                    return;
+                }
+                
+                db.close((closeErr: any) => {
+                    if (closeErr) {
+                        console.error('Warning: Failed to close database:', closeErr.message);
+                    }
+                    resolve(rows || []);
+                });
             });
         });
     }
@@ -75,8 +52,10 @@ db.all(\`${query}\`, ${JSON.stringify(params)}, (err, rows) => {
         try {
             const sql = 'SELECT * FROM items ORDER BY created_at DESC';
             const rows = await this.executeQuery(sql);
+            console.log(`Found ${rows.length} items using child process`);
             return rows;
         } catch (error) {
+            console.error('Error searching items:', error);
             return [];
         }
     }
@@ -85,7 +64,9 @@ db.all(\`${query}\`, ${JSON.stringify(params)}, (err, rows) => {
         try {
             const sql = `INSERT INTO items (title, content, language, type, tags, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`;
             await this.executeQuery(sql, [item.title, item.content, item.language, item.type, item.tags]);
+            console.log('Item saved successfully using child process');
         } catch (error) {
+            console.error('Error saving item:', error);
             throw error;
         }
     }
@@ -115,17 +96,21 @@ function updateInlineDecorations(editor: vscode.TextEditor) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    console.log('Sprig extension is now active!');
     sprigManager = new SprigManager();
     
+    // Create status bar item with Sprig icon
     sprigStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    sprigStatusBar.text = '🌿 Sprig';
+    sprigStatusBar.text = '$(symbol-misc) Sprig';
     sprigStatusBar.tooltip = 'Sprig Code Manager - Search, Save & Browse your code library';
     sprigStatusBar.command = 'sprig.iconClick';
     sprigStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
     sprigStatusBar.show();
+    
+    // Create inline decorations for when text is selected
     sprigInlineDecorations = vscode.window.createTextEditorDecorationType({
         after: {
-            contentText: ' 🌿 Save to Sprig',
+            contentText: ' 🌱 Save to Sprig',
             color: '#4CAF50',
             fontStyle: 'italic',
             margin: '0 0 0 10px',
@@ -134,15 +119,20 @@ export function activate(context: vscode.ExtensionContext) {
         },
         cursor: 'pointer'
     });
+    
+    // Show inline decoration when text is selected
     vscode.window.onDidChangeTextEditorSelection(event => {
         updateInlineDecorations(event.textEditor);
     }, null, context.subscriptions);
     
+    // Update decorations when active editor changes
     vscode.window.onDidChangeActiveTextEditor(editor => {
         if (editor) {
             updateInlineDecorations(editor);
         }
     }, null, context.subscriptions);
+
+    // Add hover provider to show save action when text is selected
     const hoverProvider = vscode.languages.registerHoverProvider('*', {
         provideHover(document, position, token) {
             const editor = vscode.window.activeTextEditor;
@@ -150,6 +140,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
+            // Only show hover if cursor is near the selection
             if (position.line >= editor.selection.start.line && position.line <= editor.selection.end.line) {
                 const commandUri = vscode.Uri.parse(`command:sprig.saveSelection`);
                 const contents = new vscode.MarkdownString(`[🌿 Save to Sprig](${commandUri})`);
@@ -158,14 +149,22 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     });
+    
+    // Refresh CodeLens when document content changes (user types)
     vscode.workspace.onDidChangeTextDocument(event => {
+        // Trigger CodeLens refresh when user types
         if (vscode.window.activeTextEditor && event.document === vscode.window.activeTextEditor.document) {
             vscode.commands.executeCommand('vscode.executeCodeLensProvider', event.document.uri);
         }
     }, null, context.subscriptions);
+
+    // Search command
     let searchSnippets = vscode.commands.registerCommand('sprig.searchSnippets', async () => {
         try {
+            console.log('Searching for items...');
             const items = await sprigManager.searchItems();
+            
+            console.log(`Retrieved ${items.length} items`);
             
             if (items.length === 0) {
                 vscode.window.showInformationMessage('No items found in Sprig library');
@@ -193,10 +192,12 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             }
         } catch (error) {
+            console.error('Search error:', error);
             vscode.window.showErrorMessage(`Failed to search Sprig library: ${error}`);
         }
     });
 
+    // Save command
     let saveSelection = vscode.commands.registerCommand('sprig.saveSelection', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !editor.selection || editor.selection.isEmpty) {
@@ -261,19 +262,18 @@ export function activate(context: vscode.ExtensionContext) {
                 });
             };
             
+            // Common paths where Sprig might be installed
             const possiblePaths = [
-                path.join('C:', 'Program Files', 'Sprig', 'Sprig.exe'),
-                path.join('C:', 'Program Files (x86)', 'Sprig', 'Sprig.exe'),
-                path.join(process.cwd(), '..', 'sprig', 'build', 'bin', 'Sprig.exe'),
-                path.join(os.homedir(), 'AppData', 'Local', 'Sprig', 'Sprig.exe'),
-                path.join(os.homedir(), 'Desktop', 'Sprig.exe'),
                 path.join(os.homedir(), 'AppData', 'Local', 'sprig', 'sprig.exe'),
                 path.join(os.homedir(), 'Desktop', 'sprig.exe'),
-                path.join(process.cwd(), '..', 'sprig', 'build', 'bin', 'sprig.exe')
+                path.join(process.cwd(), '..', 'codelib', 'build', 'bin', 'sprig.exe'),
+                path.join('C:', 'Program Files', 'Sprig', 'sprig.exe'),
+                path.join('C:', 'Program Files (x86)', 'Sprig', 'sprig.exe')
             ];
             
-            let sprigPath: string | null = null;
+            let sprigPath = null;
             
+            // Check if Sprig is installed in any common location
             for (const appPath of possiblePaths) {
                 if (await fileExists(appPath)) {
                     sprigPath = appPath;
@@ -281,53 +281,38 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             }
             
+            // Check if it's available in PATH
             if (!sprigPath) {
                 await new Promise<void>((resolve) => {
-                    exec('where Sprig.exe', (error: any, stdout: string) => {
+                    exec('where sprig.exe', (error: any, stdout: string) => {
                         if (!error && stdout.trim()) {
                             sprigPath = stdout.trim().split('\n')[0];
-                        } else {
-                            exec('where sprig.exe', (error2: any, stdout2: string) => {
-                                if (!error2 && stdout2.trim()) {
-                                    sprigPath = stdout2.trim().split('\n')[0];
-                                }
-                                resolve();
-                            });
-                            return;
                         }
                         resolve();
                     });
                 });
             }
             
-            const devPath = path.join(process.cwd(), '..', 'sprig');
+            // Check development environment
+            const devPath = path.join(process.cwd(), '..', 'codelib');
             const isDevEnvironment = await fileExists(path.join(devPath, 'wails.json'));
             
             if (sprigPath) {
+                // Sprig is installed, launch it
                 try {
-                    exec(`start "" "${sprigPath}"`, { shell: true }, (error: any, stdout: string, stderr: string) => {
-                        if (error) {
-                            exec(`powershell -Command "Start-Process -FilePath '${sprigPath}'"`, (error2: any) => {
-                                if (error2) {
-                                    exec(`"${sprigPath}"`, (error3: any) => {
-                                        if (error3) {
-                                            vscode.window.showErrorMessage(`Failed to launch Sprig: ${error3.message}`);
-                                        } else {
-                                            vscode.window.showInformationMessage('Sprig launched successfully!');
-                                        }
-                                    });
-                                } else {
-                                    vscode.window.showInformationMessage('Sprig launched successfully!');
-                                }
-                            });
-                        } else {
-                            vscode.window.showInformationMessage('Sprig launched successfully!');
-                        }
+                    const child = spawn(sprigPath, [], { 
+                        detached: true, 
+                        stdio: 'ignore',
+                        shell: true 
                     });
+                    
+                    child.unref();
+                    vscode.window.showInformationMessage('Sprig application launched!');
                 } catch (error) {
                     vscode.window.showErrorMessage(`Failed to launch Sprig: ${error}`);
                 }
             } else if (isDevEnvironment) {
+                // Development environment available
                 try {
                     const child = spawn('wails', ['dev'], {
                         cwd: devPath,
@@ -342,6 +327,7 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage('Development environment found but failed to start. Make sure Wails is installed.');
                 }
             } else {
+                // Sprig not installed, show download option
                 const action = await vscode.window.showInformationMessage(
                     'Sprig desktop application is not installed on this device.',
                     'Download Sprig Desktop App',
@@ -349,7 +335,8 @@ export function activate(context: vscode.ExtensionContext) {
                 );
                 
                 if (action === 'Download Sprig Desktop App') {
-                    vscode.env.openExternal(vscode.Uri.parse('https://github.com/Emmyme/sprig/releases'));
+                    // Open download page in browser
+                    vscode.env.openExternal(vscode.Uri.parse('https://github.com/your-username/sprig/releases')); // Update with actual download URL
                 }
             }
         } catch (error) {
@@ -361,6 +348,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('sprig.searchSnippets');
     });
 
+    // Register a command for quick save from CodeLens
     let quickSave = vscode.commands.registerCommand('sprig.quickSave', () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -369,17 +357,22 @@ export function activate(context: vscode.ExtensionContext) {
         }
         
         if (editor.selection.isEmpty) {
+            // If no selection, offer to save entire file or show info
             vscode.window.showInformationMessage('Please select some code first, then use the save command');
             return;
         }
         
+        // Execute the regular save command
         vscode.commands.executeCommand('sprig.saveSelection');
     });
+
+    // Register command to handle Sprig icon clicks
     let sprigIconClick = vscode.commands.registerCommand('sprig.iconClick', () => {
+        // Show quick pick menu for Sprig actions
         const actions = [
             { label: '🌿 Search Sprig Library', command: 'sprig.searchSnippets' },
             { label: '🌿 Save Selection', command: 'sprig.saveSelection' },
-            { label: '🔍 Browse Sprig Desktop App', command: 'sprig.openBrowser' }
+            { label: '� Browse Sprig Desktop App', command: 'sprig.openBrowser' }
         ];
 
         vscode.window.showQuickPick(actions, {
@@ -390,11 +383,15 @@ export function activate(context: vscode.ExtensionContext) {
             }
         });
     });
+
+    // Register CodeLens provider to show Sprig actions as soon as user starts typing
     const codeLensProvider = vscode.languages.registerCodeLensProvider('*', {
         provideCodeLenses: (document: vscode.TextDocument) => {
             const codeLenses: vscode.CodeLens[] = [];
             
+            // Show Sprig actions if document has any content or user is actively editing
             if (document.lineCount > 1 || (document.lineCount === 1 && document.lineAt(0).text.trim().length > 0)) {
+                // Add CodeLens at the top of the document for easy access
                 const range = new vscode.Range(0, 0, 0, 0);
                 
                 const searchCodeLens = new vscode.CodeLens(range);
@@ -405,6 +402,7 @@ export function activate(context: vscode.ExtensionContext) {
                 };
                 codeLenses.push(searchCodeLens);
                 
+                // Always show save option (it will check for selection when clicked)
                 const saveRange = new vscode.Range(0, 0, 0, 0);
                 const saveCodeLens = new vscode.CodeLens(saveRange);
                 saveCodeLens.command = {
@@ -414,6 +412,8 @@ export function activate(context: vscode.ExtensionContext) {
                 };
                 codeLenses.push(saveCodeLens);
                 
+                // Check if Sprig is installed to show appropriate browse option
+                // For now, just show browse option (installation detection handled in command)
                 const browseRange = new vscode.Range(0, 0, 0, 0);
                 const browseCodeLens = new vscode.CodeLens(browseRange);
                 
@@ -432,4 +432,6 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(searchSnippets, saveSelection, openBrowser, insertSnippet, quickSave, sprigIconClick, sprigStatusBar, codeLensProvider, hoverProvider);
 }
 
-export function deactivate() {}
+export function deactivate() {
+    // Clean up
+}
